@@ -304,6 +304,22 @@
     </div>
   </div>
 
+  <!-- ── Error Modal ── -->
+  <div id="error-modal" class="fixed inset-0 z-50 hidden items-center justify-center modal-backdrop bg-slate-900/60">
+    <div class="bg-white rounded-3xl shadow-2xl mx-5 max-w-sm w-full p-8 flex flex-col items-center text-center">
+      <div class="w-16 h-16 rounded-full bg-rose-50 flex items-center justify-center mb-4">
+        <svg class="w-8 h-8 text-rose-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+        </svg>
+      </div>
+      <h3 class="text-lg font-bold text-slate-900 mb-2">送出失敗</h3>
+      <p id="error-msg" class="text-sm text-slate-500 leading-relaxed whitespace-pre-line"></p>
+      <button onclick="closeErrorModal()" class="mt-6 w-full bg-rose-500 hover:bg-rose-600 text-white font-semibold rounded-xl py-3 text-sm transition-colors">
+        關閉，重新嘗試
+      </button>
+    </div>
+  </div>
+
   <!-- ── Success Modal ── -->
   <div id="success-modal" class="fixed inset-0 z-50 hidden items-center justify-center modal-backdrop bg-slate-900/60">
     <div class="bg-white rounded-3xl shadow-2xl mx-5 max-w-sm w-full p-8 flex flex-col items-center text-center animate-bounce-in">
@@ -323,6 +339,9 @@
   </div>
 
   <script>
+    // ── Google Apps Script URL ──
+    const GAS_URL = 'https://script.google.com/macros/s/AKfycbyaRU91IoYsv6_tXBJntUYKtM14Yk_-G_fQpjpJTHYlt4Zh786hDEgE89wlzpZIdJLK/exec';
+
     // ── Set today's date ──
     (function () {
       const today = new Date().toISOString().split('T')[0];
@@ -349,6 +368,7 @@
     }
 
     // ── File upload & preview ──
+    // Store { id, base64 } so we can send to GAS
     const uploadedFiles = [];
 
     function handleFiles(input) {
@@ -356,12 +376,28 @@
       files.forEach(file => {
         if (!file.type.startsWith('image/')) return;
         const id = Date.now() + Math.random();
-        const reader = new FileReader();
-        reader.onload = e => addThumb(e.target.result, id);
-        reader.readAsDataURL(file);
-        uploadedFiles.push({ id, file });
+        compressAndRead(file, id);
       });
-      input.value = ''; // reset so same file can be re-added
+      input.value = '';
+    }
+
+    // Compress image to max 800px wide, quality 0.7 → keeps Base64 small
+    function compressAndRead(file, id) {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const MAX = 800;
+        let w = img.width, h = img.height;
+        if (w > MAX) { h = Math.round(h * MAX / w); w = MAX; }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        const base64 = canvas.toDataURL('image/jpeg', 0.7);
+        URL.revokeObjectURL(url);
+        uploadedFiles.push({ id, base64 });
+        addThumb(base64, id);
+      };
+      img.src = url;
     }
 
     function addThumb(src, id) {
@@ -416,38 +452,69 @@
       }
     }
 
+    // ── Loading state ──
+    function setLoading(on) {
+      const btn = document.getElementById('submit-btn');
+      if (on) {
+        btn.disabled = true;
+        btn.innerHTML = `
+          <svg class="animate-spin w-5 h-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+          </svg>
+          資料上傳中，請稍候…`;
+        btn.classList.add('opacity-80', 'cursor-not-allowed');
+      } else {
+        btn.disabled = false;
+        btn.innerHTML = `
+          <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+          </svg>
+          送出結案申請`;
+        btn.classList.remove('opacity-80', 'cursor-not-allowed');
+      }
+    }
+
+    // ── Error modal ──
+    function showErrorModal(msg) {
+      document.getElementById('error-msg').textContent = msg;
+      const m = document.getElementById('error-modal');
+      m.classList.remove('hidden');
+      m.classList.add('flex');
+    }
+    function closeErrorModal() {
+      const m = document.getElementById('error-modal');
+      m.classList.add('hidden');
+      m.classList.remove('flex');
+    }
+
     // ── Submit ──
-    function handleSubmit() {
+    async function handleSubmit() {
       let valid = true;
 
-      // 藥局名稱
       const pharmacy = document.getElementById('pharmacy-name').value.trim();
       const badPharmacy = !pharmacy;
       highlightField('pharmacy-name', badPharmacy);
       showErr('err-pharmacy', badPharmacy);
       if (badPharmacy) valid = false;
 
-      // 口數
       const units = document.getElementById('units').value.trim();
       const badUnits = !units || parseInt(units) < 1 || !Number.isInteger(Number(units));
       highlightField('units', badUnits);
       showErr('err-units', badUnits);
       if (badUnits) valid = false;
 
-      // 至少一個申請項目
       const hasA = document.getElementById('check-a').checked;
       const hasB = document.getElementById('check-b').checked;
       const badItems = !hasA && !hasB;
       showErr('err-items', badItems);
       if (badItems) valid = false;
 
-      // 憑證
       const badFiles = uploadedFiles.length === 0;
       showErr('err-files', badFiles);
       if (badFiles) valid = false;
 
       if (!valid) {
-        // scroll to first error
         const firstErr = document.querySelector('.text-rose-500:not(.hidden)');
         if (firstErr) firstErr.scrollIntoView({ behavior: 'smooth', block: 'center' });
         const btn = document.getElementById('submit-btn');
@@ -456,7 +523,44 @@
         return;
       }
 
-      // Show success modal
+      // ── Collect data ──
+      const rebateRadio = document.querySelector('input[name="rebate"]:checked');
+      const payload = {
+        region:       document.getElementById('region').value,
+        distributor:  document.getElementById('distributor').value.trim(),
+        pharmacyName: pharmacy,
+        address:      document.getElementById('address').value.trim(),
+        phone:        document.getElementById('phone').value.trim(),
+        units:        parseInt(units),
+        cutDate:      document.getElementById('cut-date').value,
+        applyDate:    document.getElementById('apply-date').value,
+        rebate:       hasA ? (rebateRadio ? rebateRadio.value + '%' : '未選擇%') : '',
+        waterDetail:  hasB ? document.getElementById('water-detail').value.trim() : '',
+        fileCount:    uploadedFiles.length,
+        // Join all images as JSON array string (each compressed to ~50–80KB)
+        files:        JSON.stringify(uploadedFiles.map(f => f.base64))
+      };
+
+      // ── Send to Google Apps Script ──
+      setLoading(true);
+      try {
+        const res = await fetch(GAS_URL, {
+          method: 'POST',
+          // GAS requires no-cors for cross-origin POST from static pages
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        // no-cors → response is opaque, treat reach here as success
+        showSuccessModal();
+      } catch (err) {
+        showErrorModal('網路連線失敗，請確認網路後再試。\n（' + err.message + '）');
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    function showSuccessModal() {
       const modal = document.getElementById('success-modal');
       modal.classList.remove('hidden');
       modal.classList.add('flex');
@@ -468,9 +572,11 @@
       modal.classList.remove('flex');
     }
 
-    // Close modal on backdrop click
     document.getElementById('success-modal').addEventListener('click', function(e) {
       if (e.target === this) closeModal();
+    });
+    document.getElementById('error-modal').addEventListener('click', function(e) {
+      if (e.target === this) closeErrorModal();
     });
   </script>
 </body>
