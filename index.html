@@ -542,21 +542,21 @@
       };
 
       // ── Send to Google Apps Script ──
+      // Content-Type: text/plain avoids CORS preflight block on GAS
       setLoading(true);
       try {
-        const res = await fetch(GAS_URL, {
+        await fetch(GAS_URL, {
           method: 'POST',
-          // GAS requires no-cors for cross-origin POST from static pages
           mode: 'no-cors',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
           body: JSON.stringify(payload)
         });
-        // no-cors → response is opaque, treat reach here as success
+        // no-cors → opaque response; reaching here means the request was sent
+        setLoading(false);
         showSuccessModal();
       } catch (err) {
-        showErrorModal('網路連線失敗，請確認網路後再試。\n（' + err.message + '）');
-      } finally {
         setLoading(false);
+        showErrorModal('網路連線失敗，請確認網路後再試。\n（' + err.message + '）');
       }
     }
 
